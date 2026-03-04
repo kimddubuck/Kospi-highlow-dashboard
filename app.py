@@ -2,21 +2,56 @@ import streamlit as st
 import pandas as pd
 import yfinance as yf
 import plotly.graph_objects as go
-from datetime import datetime, timedelta
+import requests
 
 st.set_page_config(page_title="Kospi High-Low Dashboard", layout="wide")
 
-st.title("코스피 신고가/신저가 비율 대시보드")
-st.caption("현재는 1차 테스트 버전입니다. 실제 데이터 호출이 실패하면 예시 데이터로 화면을 계속 보여줍니다.")
+# -----------------------------
+# 키움 인증
+# -----------------------------
+@st.cache_data(ttl=300)
+def get_kiwoom_token():
+    try:
+        appkey = st.secrets["KIWOOM_APPKEY"]
+        secret = st.secrets["KIWOOM_SECRET"]
+        use_mock = str(st.secrets.get("KIWOOM_USE_MOCK", "false")).lower() == "true"
+
+        base_url = "https://mockapi.kiwoom.com" if use_mock else "https://api.kiwoom.com"
+        url = f"{base_url}/oauth2/token"
+
+        payload = {
+            "grant_type": "client_credentials",
+            "appkey": appkey,
+            "secretkey": secret,
+        }
+
+        headers = {
+            "Content-Type": "application/json;charset=UTF-8"
+        }
+
+        r = requests.post(url, json=payload, headers=headers, timeout=15)
+
+        if r.status_code != 200:
+            return None, f"HTTP {r.status_code}: {r.text}"
+
+        data = r.json()
+        token = data.get("token")
+
+        if not token:
+            return None, f"토큰 없음: {data}"
+
+        return token, None
+
+    except Exception as e:
+        return None, str(e)
 
 # -----------------------------
-# 예시 코스피 데이터 만들기 (실패 시 대체용)
+# 예시 코스피 데이터 (실패 시 대체)
 # -----------------------------
 def make_sample_daily_data():
     dates = pd.date_range(end=pd.Timestamp.today(), periods=120, freq="B")
     values = []
     base = 2500
-
     pattern = [0, 8, -5, 12, -7, 6, -3, 10, -4, 5]
 
     current = base
@@ -24,15 +59,13 @@ def make_sample_daily_data():
         current += pattern[i % len(pattern)]
         values.append(current)
 
-    df = pd.DataFrame({"Close": values}, index=dates)
-    return df
+    return pd.DataFrame({"Close": values}, index=dates)
 
 def make_sample_4h_data():
     end_time = pd.Timestamp.now().floor("h")
     dates = pd.date_range(end=end_time, periods=120, freq="4h")
     values = []
     base = 2520
-
     pattern = [0, 3, -2, 5, -3, 4, -1, 2, -2, 3]
 
     current = base
@@ -40,11 +73,10 @@ def make_sample_4h_data():
         current += pattern[i % len(pattern)]
         values.append(current)
 
-    df = pd.DataFrame({"Close": values}, index=dates)
-    return df
+    return pd.DataFrame({"Close": values}, index=dates)
 
 # -----------------------------
-# 실제 코스피 데이터 가져오기
+# 코스피 데이터
 # -----------------------------
 @st.cache_data(ttl=300)
 def get_kospi_daily():
@@ -56,7 +88,6 @@ def get_kospi_daily():
 
         if df.empty:
             return make_sample_daily_data(), False
-
         return df, True
     except Exception:
         return make_sample_daily_data(), False
@@ -100,7 +131,6 @@ def get_kospi_4h():
 # -----------------------------
 def make_price_chart(df, title_text):
     fig = go.Figure()
-
     fig.add_trace(
         go.Scatter(
             x=df.index,
@@ -109,7 +139,6 @@ def make_price_chart(df, title_text):
             name="코스피"
         )
     )
-
     fig.update_layout(
         title=title_text,
         xaxis_title="시간",
@@ -126,14 +155,12 @@ def make_indicator_series(index_values):
 
     base = [0.12, 0.15, 0.18, 0.11, 0.20, 0.16, 0.14, 0.22, 0.13, 0.17]
     values = [base[i % len(base)] for i in range(n)]
-
     return pd.Series(values, index=index_values)
 
 def make_indicator_chart(index_values, title_text):
     indicator = make_indicator_series(index_values)
 
     fig = go.Figure()
-
     fig.add_trace(
         go.Scatter(
             x=indicator.index,
@@ -142,7 +169,6 @@ def make_indicator_chart(index_values, title_text):
             name="지표"
         )
     )
-
     fig.add_hline(y=0.10, line_dash="dash", annotation_text="10% 기준")
     fig.add_hline(y=0.20, line_dash="dash", annotation_text="20% 기준")
 
@@ -158,6 +184,16 @@ def make_indicator_chart(index_values, title_text):
 # -----------------------------
 # 화면
 # -----------------------------
+st.title("코스피 신고가/신저가 비율 대시보드")
+st.caption("현재는 키움 인증 확인 단계입니다. 인증이 성공하면 다음 단계에서 실제 신고가/신저가 데이터를 연결합니다.")
+
+token, token_error = get_kiwoom_token()
+
+if token:
+    st.success("키움 인증 성공: 접근토큰 발급 완료")
+else:
+    st.error(f"키움 인증 실패: {token_error}")
+
 chart_type = st.radio(
     "차트 기준을 선택하세요",
     ["4시간봉", "일봉"],
@@ -174,7 +210,6 @@ else:
     indicator_title = "2번 차트 - 신고가/신저가 비율 (예시 데이터, 일봉 기준)"
 
 latest_close = float(kospi_df["Close"].iloc[-1])
-
 sample_high = 18
 sample_low = 102
 sample_ratio = sample_high / (sample_high + sample_low)
@@ -192,7 +227,4 @@ else:
 st.plotly_chart(make_price_chart(kospi_df, price_title), use_container_width=True)
 st.plotly_chart(make_indicator_chart(kospi_df.index, indicator_title), use_container_width=True)
 
-st.info(
-    "현재 두 번째 차트는 아직 예시 데이터입니다. "
-    "다음 단계에서 키움 API를 연결하면 실제 신고가/신저가 비율로 바꿀 수 있습니다."
-)
+st.info("다음 단계에서 실제 신고가/신저가 데이터를 연결합니다.")
